@@ -1,0 +1,27 @@
+{
+  "name": "guardlayer-scan",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Free static security scanner for Next.js + Supabase apps, as a GitHub Action.",
+  "license": "MIT",
+  "homepage": "https://www.guardlayer.io",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/solvionsolutions/guardlayer-scan"
+  },
+  "scripts": {
+    "build": "ncc build src/cli.ts -o dist --minify",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "ignore": "^5.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@vercel/ncc": "^0.38.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
