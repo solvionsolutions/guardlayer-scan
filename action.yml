@@ -1,5 +1,5 @@
 name: "GuardLayer Scan"
-description: "Free static security scanner for Next.js + Supabase apps. Catches exposed secrets, missing RLS, unverified webhooks, and unguarded Server Actions in CI — no signup."
+description: "Free static security scanner for Next.js + Supabase apps: secrets, RLS, webhooks, Server Action auth."
 author: "GuardLayer"
 branding:
   icon: "shield"
