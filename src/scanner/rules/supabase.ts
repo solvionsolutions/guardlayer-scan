@@ -340,4 +340,56 @@ export const supabaseRules: Rule[] = [
       return [{ line: lineAt(f.content, idx), snippet: snippetAt(f.content, idx) }];
     },
   },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // WARNING — public table explicitly GRANTed to the anon role without RLS
+  // ──────────────────────────────────────────────────────────────────────
+  {
+    id: "supabase/grant-to-anon",
+    title: "Table granted to the anon role without RLS",
+    severity: "warning",
+    category: "supabase",
+    cwe: "CWE-732",
+    message:
+      "A public table is GRANTed to the anon (unauthenticated) role but RLS is never enabled for it in this migration. Since the 2026 Supabase change, tables reach the Data API only via explicit grants — so this GRANT hands every anonymous visitor direct access with no policy in front of it.",
+    recommendation:
+      "Enable RLS on the table (ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;) and add scoped policies, or revoke the grant from anon. Only keep an anon grant for genuinely public data that is still RLS-protected.",
+    appliesTo: (f) => isSql(f.path),
+    scan: (f) => {
+      const out: RuleMatch[] = [];
+
+      // Tables that DO get RLS enabled in this file, keyed schema.table.
+      const enabled = new Set<string>();
+      const alterRe =
+        /ALTER\s+TABLE\s+(?:ONLY\s+)?(?:(["']?[a-z0-9_]+["']?)\s*\.\s*)?(["']?[a-z0-9_]+["']?)\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/gi;
+      let am: RegExpExecArray | null;
+      while ((am = alterRe.exec(f.content)) !== null) {
+        const schema = am[1] ? unquote(am[1]) : "public";
+        enabled.add(`${schema}.${unquote(am[2])}`);
+      }
+
+      // GRANT <privs> ON [TABLE] <schema.table> ... TO ... anon
+      // Bounded, lazy quantifiers => ReDoS-safe. Negative lookahead skips
+      // ON SCHEMA/FUNCTION/SEQUENCE/DATABASE and ON ALL TABLES.
+      const grantRe =
+        /\bGRANT\s+(?:SELECT|INSERT|UPDATE|DELETE|ALL)(?:\s+PRIVILEGES)?[\s\S]{0,120}?\bON\s+(?:TABLE\s+)?(?!SCHEMA\b|FUNCTION\b|SEQUENCE\b|DATABASE\b|ALL\b)(?:(["']?[a-z0-9_]+["']?)\s*\.\s*)?(["']?[a-z0-9_]+["']?)[\s\S]{0,160}?\bTO\b[\s\S]{0,160}?\banon\b/gi;
+      let gm: RegExpExecArray | null;
+      let guard = 0;
+      while ((gm = grantRe.exec(f.content)) !== null) {
+        if (++guard > 500) break;
+        const schema = gm[1] ? unquote(gm[1]) : "public";
+        const table = unquote(gm[2]);
+        if (schema !== "public") continue; // only the Data-API-exposed schema
+        if (INTERNAL_SCHEMAS.has(schema)) continue;
+        if (table.startsWith("_")) continue;
+        if (enabled.has(`${schema}.${table}`)) continue; // RLS present -> not a finding
+        out.push({
+          line: lineAt(f.content, gm.index),
+          snippet: snippetAt(f.content, gm.index),
+          message: `Table "${table}" is granted to anon but RLS is never enabled for it in this file.`,
+        });
+      }
+      return out;
+    },
+  },
 ];

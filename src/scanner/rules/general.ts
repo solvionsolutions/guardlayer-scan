@@ -53,12 +53,13 @@ const KNOWN_VULN_DEPS: {
 }[] = [
   {
     name: "next",
-    // Next.js maintains parallel branches. Patched floors: 15.5.18 and 16.2.6
-    // (the May-2026 set + CVE-2025-29927). 14.x and older got no fix for the
-    // latest set, so any major below 15 is flagged outright.
-    fixedByMajor: { 15: [15, 5, 18], 16: [16, 2, 6] },
+    // Next.js maintains parallel branches. Patched floors: 15.5.21 and 16.2.11
+    // (the July 2026 monthly release: 4 high + 5 medium, CVE-2026-64641..64649).
+    // 14.x and older got no fix for the latest set, so any major below 15 is
+    // flagged outright.
+    fixedByMajor: { 15: [15, 5, 21], 16: [16, 2, 11] },
     advisory:
-      "Next.js middleware/proxy bypass, SSRF, cache poisoning and DoS advisories (incl. CVE-2025-29927 and the May 2026 release) — patch to 15.5.18+ or 16.2.6+; 14.x and older have no fix branch.",
+      "Next.js middleware/proxy bypass, SSRF (rewrites + Server Actions), DoS and cache-confusion advisories from the July 2026 security release (CVE-2026-64641 through CVE-2026-64649) plus the earlier CVE-2025-29927 bypass — patch to 15.5.21+ or 16.2.11+; 14.x and older have no fix branch.",
   },
   { name: "lodash", fixedBelow: [4, 17, 21], advisory: "Prototype pollution / ReDoS fixed in lodash 4.17.21." },
   { name: "axios", fixedBelow: [1, 8, 0], advisory: "SSRF / credential leak advisories fixed in axios 1.8.0." },
