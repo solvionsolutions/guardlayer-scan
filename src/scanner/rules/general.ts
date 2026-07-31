@@ -69,6 +69,18 @@ const KNOWN_VULN_DEPS: {
   { name: "ws", fixedBelow: [8, 17, 1], advisory: "DoS via many headers fixed in ws 8.17.1." },
 ];
 
+/** Packages that are deprecated / unmaintained — still installable, but no
+ *  longer receiving security or bug fixes. A `prefix` match catches a whole
+ *  family (e.g. every @supabase/auth-helpers-* package) with zero FP risk,
+ *  since no legitimate package shares these namespaces. */
+const KNOWN_DEPRECATED_DEPS: { prefix: string; advisory: string }[] = [
+  {
+    prefix: "@supabase/auth-helpers",
+    advisory:
+      "@supabase/auth-helpers-* is deprecated — Supabase moved server-side auth to @supabase/ssr and no longer ships fixes here, so an app still on auth-helpers is running an unmaintained auth layer. Migrate to @supabase/ssr.",
+  },
+];
+
 function parseVersion(v: string): [number, number, number] | null {
   const cleaned = v.replace(/^[\^~>=<\s]+/, "").trim();
   const m = cleaned.match(/^(\d+)\.(\d+)\.(\d+)/);
@@ -254,6 +266,55 @@ export const generalRules: Rule[] = [
             message: `${adv.name}@${raw}: ${adv.advisory} (upgrade to >= ${target.join(".")}).`,
           });
         }
+      }
+      return out;
+    },
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // INFO — deprecated / unmaintained dependency
+  // ──────────────────────────────────────────────────────────────────────
+  {
+    id: "general/deprecated-dependency",
+    title: "Deprecated, unmaintained dependency",
+    severity: "info",
+    category: "general",
+    cwe: "CWE-1104",
+    message:
+      "A dependency is deprecated and no longer receives security or bug fixes. Staying on an unmaintained package means any future advisory against it will never be patched.",
+    recommendation:
+      "Migrate to the maintained replacement. For @supabase/auth-helpers, move to @supabase/ssr — see Supabase's auth-helpers → SSR migration guide.",
+    appliesTo: (f) => /(^|[\/\\])package\.json$/.test(f.path),
+    scan: (f) => {
+      let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      try {
+        pkg = JSON.parse(f.content);
+      } catch {
+        return [];
+      }
+      // Pull only the two known keys — never spread arbitrary uploaded JSON
+      // (prototype-pollution hygiene), matching general/vulnerable-dependency.
+      const deps: Record<string, string> = {};
+      if (pkg && typeof pkg.dependencies === "object") {
+        for (const [k, v] of Object.entries(pkg.dependencies)) {
+          if (k !== "__proto__") deps[k] = v as string;
+        }
+      }
+      if (pkg && typeof pkg.devDependencies === "object") {
+        for (const [k, v] of Object.entries(pkg.devDependencies)) {
+          if (k !== "__proto__" && !(k in deps)) deps[k] = v as string;
+        }
+      }
+      const out: RuleMatch[] = [];
+      for (const name of Object.keys(deps)) {
+        const adv = KNOWN_DEPRECATED_DEPS.find((d) => name.startsWith(d.prefix));
+        if (!adv) continue;
+        const idx = f.content.indexOf(`"${name}"`);
+        out.push({
+          line: idx >= 0 ? lineAt(f.content, idx) : 1,
+          snippet: idx >= 0 ? snippetAt(f.content, idx) : `"${name}": "${deps[name]}"`,
+          message: `${name} is deprecated. ${adv.advisory}`,
+        });
       }
       return out;
     },
