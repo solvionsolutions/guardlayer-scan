@@ -21,6 +21,11 @@ const SECRET_PATTERNS: { name: string; re: RegExp }[] = [
   { name: "Google API key", re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
   { name: "Slack token", re: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g },
   { name: "SendGrid API key", re: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/g },
+  // Supabase's NEW secret key format (replacing the legacy service_role JWT,
+  // which is deprecated end-2026). Server-only: it bypasses every RLS policy.
+  // Its sibling `sb_publishable_` is public by design and is already
+  // whitelisted in PUBLIC_KEY_PREFIX — do NOT add it here.
+  { name: "Supabase secret key", re: /\bsb_secret_[A-Za-z0-9_-]{16,}\b/g },
   {
     name: "Private key block",
     re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g,
@@ -60,6 +65,15 @@ const KNOWN_VULN_DEPS: {
     fixedByMajor: { 15: [15, 5, 21], 16: [16, 2, 11] },
     advisory:
       "Next.js middleware/proxy bypass, SSRF (rewrites + Server Actions), DoS and cache-confusion advisories from the July 2026 security release (CVE-2026-64641 through CVE-2026-64649) plus the earlier CVE-2025-29927 bypass — patch to 15.5.21+ or 16.2.11+; 14.x and older have no fix branch.",
+  },
+  {
+    name: "@supabase/auth-js",
+    // GHSA-8r88-6cj9-9fh5 lists affected as "<= 2.69.1" and patched as "2.70.0".
+    // 2.69.1 shipped 2025-03-24, BEFORE the May-2025 disclosure, so it is
+    // vulnerable — the floor is 2.70.0, not 2.69.1.
+    fixedBelow: [2, 70, 0],
+    advisory:
+      "Insecure path routing (CVE-2025-48370): getUserById / deleteUser / updateUserById / listFactors / deleteFactor accepted non-UUID ids, allowing URL path traversal into a different API function. Fixed in 2.70.0, which requires a valid UUID v4.",
   },
   { name: "lodash", fixedBelow: [4, 17, 21], advisory: "Prototype pollution / ReDoS fixed in lodash 4.17.21." },
   { name: "axios", fixedBelow: [1, 8, 0], advisory: "SSRF / credential leak advisories fixed in axios 1.8.0." },

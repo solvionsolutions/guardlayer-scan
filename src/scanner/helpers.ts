@@ -215,6 +215,53 @@ export function isSql(path: string): boolean {
 }
 
 /**
+ * Blank out SQL comments while PRESERVING line structure (so line numbers
+ * computed against the original content still line up). The SQL counterpart of
+ * `stripJsComments` — lets a migration warn *about* a footgun in a comment
+ * without the rule flagging the comment itself.
+ *
+ * Known trade-off: a literal `--` inside a string literal blanks the rest of
+ * that line. That can only ever cause a false NEGATIVE, never a false positive.
+ */
+export function stripSqlComments(content: string): string {
+  // Block comments: same length, newlines preserved.
+  let out = content.replace(/\/\*[\s\S]*?\*\//g, (block) =>
+    block.replace(/[^\n]/g, " ")
+  );
+  // Line comments: `--` to end of line.
+  out = out.replace(/--[^\n]*/g, (c) => " ".repeat(c.length));
+  return out;
+}
+
+/**
+ * End index (exclusive) of the SQL statement starting at `from` — the first
+ * top-level `;`, skipping dollar-quoted bodies so a `;` inside a function body
+ * doesn't terminate the statement early. Capped so a pathological input can't
+ * make a rule walk the whole file.
+ */
+export function sqlStatementEnd(src: string, from: number, cap = 8000): number {
+  const limit = Math.min(src.length, from + cap);
+  let i = from;
+  while (i < limit) {
+    const ch = src[i];
+    if (ch === "$") {
+      // A dollar-quote tag ($$ or $tag$). Note `$1` positional params do NOT
+      // match — the closing `$` is required.
+      const tag = /^\$[A-Za-z0-9_]*\$/.exec(src.slice(i, i + 64));
+      if (tag) {
+        const close = src.indexOf(tag[0], i + tag[0].length);
+        if (close === -1) return limit; // unterminated body
+        i = close + tag[0].length;
+        continue;
+      }
+    }
+    if (ch === ";") return i;
+    i++;
+  }
+  return limit;
+}
+
+/**
  * Blank out JS/TS comments while PRESERVING line structure (so line numbers
  * computed against the original content still line up). Used by prose-sensitive
  * rules so a defensive comment that merely mentions a term isn't flagged.

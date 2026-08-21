@@ -98,7 +98,7 @@ export const mcpRules: Rule[] = [
           if (/^(pk_|sb_publishable_|pub_)/.test(value)) return null; // public keys
           // Provider-format secrets are caught by general/hardcoded-secret — don't
           // double-flag them here.
-          if (/^(sk-|sk_live_|rk_live_|gh[opusr]_|github_pat_|AKIA|AIza|xox[baprs]-|SG\.)/.test(value)) {
+          if (/^(sk-|sk_live_|rk_live_|gh[opusr]_|github_pat_|AKIA|AIza|xox[baprs]-|SG\.|sb_secret_)/.test(value)) {
             return null;
           }
           // Require some entropy so a plain word isn't flagged.

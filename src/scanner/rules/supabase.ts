@@ -7,6 +7,9 @@ import {
   matchLines,
   snippetAt,
   lineAt,
+  columnAt,
+  stripSqlComments,
+  sqlStatementEnd,
 } from "../helpers";
 
 const isJsLike = (f: ScanFile) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f.path);
@@ -268,6 +271,52 @@ export const supabaseRules: Rule[] = [
   },
 
   // ──────────────────────────────────────────────────────────────────────
+  // CRITICAL — RLS policy that decides access from user-EDITABLE metadata
+  // ──────────────────────────────────────────────────────────────────────
+  {
+    id: "supabase/rls-policy-user-metadata",
+    title: "RLS policy trusts user-editable metadata",
+    severity: "critical",
+    category: "supabase",
+    cwe: "CWE-639",
+    message:
+      "An RLS policy makes its access decision from user_metadata (auth.users.raw_user_meta_data). That field is writable by the end user via supabase.auth.updateUser({ data: … }), so any authenticated user can set whatever value the policy checks and grant themselves access — e.g. updateUser({ data: { is_admin: true } }).",
+    recommendation:
+      "Never read user_metadata in a policy. Use app_metadata / raw_app_meta_data, which the user cannot write — or better, keep the role/tenant in a table your server controls and join against it, e.g. USING (EXISTS (SELECT 1 FROM public.memberships m WHERE m.user_id = auth.uid() AND m.org_id = org_id)).",
+    reference:
+      "https://supabase.github.io/splinter/0015_rls_references_user_metadata/",
+    appliesTo: (f) => isSql(f.path),
+    scan: (f) => {
+      const out: RuleMatch[] = [];
+      // Comment-stripped copy: a migration is allowed to WARN about this
+      // footgun in prose without tripping the rule. Line-preserving, so
+      // offsets still map onto the original content.
+      const src = stripSqlComments(f.content);
+      const re = /CREATE\s+POLICY\b/gi;
+      let m: RegExpExecArray | null;
+      let guard = 0;
+      while ((m = re.exec(src)) !== null) {
+        if (++guard > 500) break;
+        const end = sqlStatementEnd(src, m.index);
+        const stmt = src.slice(m.index, end);
+        // `user_metadata` / `raw_user_meta_data` only. The safe counterparts
+        // (app_metadata / raw_app_meta_data) are distinct tokens — no substring
+        // collision — and a bare `metadata` is deliberately NOT matched.
+        const hit = /\buser_metadata\b|\braw_user_meta_data\b/i.exec(stmt);
+        if (!hit) continue;
+        const idx = m.index + hit.index;
+        out.push({
+          line: lineAt(f.content, idx),
+          column: columnAt(f.content, idx),
+          snippet: snippetAt(f.content, idx),
+        });
+        re.lastIndex = end;
+      }
+      return out;
+    },
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
   // WARNING — edge function with no real auth validation
   // ──────────────────────────────────────────────────────────────────────
   {
@@ -387,6 +436,70 @@ export const supabaseRules: Rule[] = [
           line: lineAt(f.content, gm.index),
           snippet: snippetAt(f.content, gm.index),
           message: `Table "${table}" is granted to anon but RLS is never enabled for it in this file.`,
+        });
+      }
+      return out;
+    },
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // WARNING — SECURITY DEFINER function with an unpinned search_path
+  // ──────────────────────────────────────────────────────────────────────
+  {
+    id: "supabase/security-definer-mutable-search-path",
+    title: "SECURITY DEFINER function without a fixed search_path",
+    severity: "warning",
+    category: "supabase",
+    cwe: "CWE-426",
+    message:
+      "A SECURITY DEFINER function runs with the privileges of the user who created it, but its search_path is inherited from the caller. Anyone who can create objects in a schema on that search_path can make the function resolve to a table or function they control, and it will run with elevated privileges.",
+    recommendation:
+      "Pin the search_path on the function: add `set search_path = ''` to the definition (or `ALTER FUNCTION <name> SET search_path = '';`) and fully qualify every object reference inside it, e.g. public.profiles instead of profiles.",
+    reference:
+      "https://supabase.github.io/splinter/0011_function_search_path_mutable/",
+    appliesTo: (f) => isSql(f.path),
+    scan: (f) => {
+      const src = stripSqlComments(f.content);
+      const out: RuleMatch[] = [];
+
+      // Functions pinned via a separate ALTER FUNCTION statement are fine.
+      const altered = new Set<string>();
+      const altRe =
+        /ALTER\s+FUNCTION\s+(?:(["']?[a-z0-9_]+["']?)\s*\.\s*)?(["']?[a-z0-9_]+["']?)[\s\S]{0,300}?\bSET\s+search_path\b/gi;
+      let am: RegExpExecArray | null;
+      let aGuard = 0;
+      while ((am = altRe.exec(src)) !== null) {
+        if (++aGuard > 300) break;
+        altered.add(unquote(am[2]));
+      }
+
+      const re =
+        /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(["']?[a-z0-9_]+["']?)\s*\.\s*)?(["']?[a-z0-9_]+["']?)/gi;
+      let m: RegExpExecArray | null;
+      let guard = 0;
+      while ((m = re.exec(src)) !== null) {
+        if (++guard > 200) break;
+        // Dollar-quote-aware statement end, so options placed AFTER the body
+        // (`AS $$…$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''`)
+        // are still inside the window.
+        const end = sqlStatementEnd(src, m.index);
+        const stmt = src.slice(m.index, end);
+        re.lastIndex = end;
+
+        // Invoker-rights functions don't carry the privilege-escalation risk —
+        // restricting to SECURITY DEFINER is what keeps this rule precise.
+        if (!/\bSECURITY\s+DEFINER\b/i.test(stmt)) continue;
+        if (/\bSET\s+search_path\b/i.test(stmt)) continue;
+        const schema = m[1] ? unquote(m[1]) : "public";
+        if (INTERNAL_SCHEMAS.has(schema)) continue;
+        const name = unquote(m[2]);
+        if (altered.has(name)) continue;
+
+        out.push({
+          line: lineAt(f.content, m.index),
+          column: columnAt(f.content, m.index),
+          snippet: snippetAt(f.content, m.index),
+          message: `SECURITY DEFINER function "${name}" does not pin its search_path.`,
         });
       }
       return out;
