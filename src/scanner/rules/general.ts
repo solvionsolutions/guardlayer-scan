@@ -58,13 +58,16 @@ const KNOWN_VULN_DEPS: {
 }[] = [
   {
     name: "next",
-    // Next.js maintains parallel branches. Patched floors: 15.5.21 and 16.2.11
-    // (the July 2026 monthly release: 4 high + 5 medium, CVE-2026-64641..64649).
-    // 14.x and older got no fix for the latest set, so any major below 15 is
-    // flagged outright.
-    fixedByMajor: { 15: [15, 5, 21], 16: [16, 2, 11] },
+    // Next.js maintains parallel branches, and Active LTS MOVED 16.2 -> 16.3 in
+    // the August 2026 release (published 2026-08-25): two CRITICAL unauthenticated
+    // RCEs — Image Optimization via a crafted AVIF (GHSA-2xp9-vwfh-vxw4, upstream
+    // libheif/sharp) and Windows-hosted servers (CVE-2026-75604, no workaround).
+    // NOTE: 16.2.11 — the PREVIOUS floor — is itself vulnerable, so the 16 key
+    // must point at the 16.3 branch, not 16.2. 14.x and older have no fix branch,
+    // so any major below 15 is flagged outright.
+    fixedByMajor: { 15: [15, 5, 24], 16: [16, 3, 3] },
     advisory:
-      "Next.js middleware/proxy bypass, SSRF (rewrites + Server Actions), DoS and cache-confusion advisories from the July 2026 security release (CVE-2026-64641 through CVE-2026-64649) plus the earlier CVE-2025-29927 bypass — patch to 15.5.21+ or 16.2.11+; 14.x and older have no fix branch.",
+      "Two CRITICAL unauthenticated RCE advisories from the August 2026 security release — Image Optimization via a crafted AVIF image (GHSA-2xp9-vwfh-vxw4, upstream libheif) and Windows-hosted servers using Pages Router + App Router without Cache Components (CVE-2026-75604, no known workaround) — on top of the July 2026 set (CVE-2026-64641 through CVE-2026-64649) and the earlier CVE-2025-29927 bypass. Patch to 15.5.24+ or 16.3.3+; 14.x and older have no fix branch.",
   },
   {
     name: "@supabase/auth-js",
