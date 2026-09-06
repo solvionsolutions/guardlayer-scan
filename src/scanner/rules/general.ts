@@ -44,16 +44,43 @@ const PUBLIC_KEY_PREFIX = /^(pk_|sb_publishable_|pub_|pk\.eyJ|6L[0-9A-Za-z_-]{38
 // Stripe ephemeral client secrets are designed to be sent to the browser.
 const STRIPE_CLIENT_SECRET = /^(pi|seti)_[A-Za-z0-9]+_secret_[A-Za-z0-9]+$/;
 
+/** A GitHub Actions workflow file. */
+const IS_WORKFLOW = /\.github[\/\\]workflows[\/\\][^\/\\]+\.ya?ml$/i;
+
+/** `pull_request_target` used as a workflow trigger, in any of the four YAML
+ *  shapes GitHub accepts. Matching the trigger POSITION (not a bare mention)
+ *  keeps prose and comments out. */
+const PRT_TRIGGER = new RegExp(
+  [
+    String.raw`^\s{0,8}pull_request_target\s*:`, // on:\n  pull_request_target:
+    String.raw`^\s{0,8}-\s*pull_request_target\s*$`, // on:\n  - pull_request_target
+    String.raw`\bon\s*:\s*pull_request_target\b`, // on: pull_request_target
+    String.raw`\bon\s*:\s*\[[^\]\n]{0,160}\bpull_request_target\b`, // on: [push, pull_request_target]
+  ].join("|"),
+  "m"
+);
+
+/** An explicit checkout of the PULL REQUEST HEAD — i.e. the untrusted fork code.
+ *  `pull_request_target` on its own checks out the BASE repo and is the safe
+ *  default, so this second marker is what turns the pair into a finding. */
+const PR_HEAD_CHECKOUT =
+  /ref\s*:\s*["']?\$\{\{\s*github\.event\.pull_request\.head\.(?:sha|ref)\s*\}\}|refs\/pull\/[^\s"']{0,40}\/(?:merge|head)/i;
+
 /** Curated, conservative advisory list (sample set for the MVP).
  *  `fixedBelow` = a single global floor (simple deps). `fixedByMajor` = a floor
  *  per major release branch, for packages (like Next.js) that backport fixes to
  *  several maintained majors — a single global floor there is WRONG, because a
  *  higher major always compares "greater" and slips through even when it has its
- *  own known-vulnerable range. */
+ *  own known-vulnerable range. `fixedByBranch` = a floor per "major.minor"
+ *  branch, for packages (like React) that patch several parallel MINORS of the
+ *  same major: React fixed CVE-2026-23864 in 19.0.4, 19.1.5 AND 19.2.4, so both
+ *  of the coarser shapes would flag 19.1.5 — a fully patched version — as
+ *  vulnerable. */
 const KNOWN_VULN_DEPS: {
   name: string;
   fixedBelow?: [number, number, number];
   fixedByMajor?: Record<number, [number, number, number]>;
+  fixedByBranch?: Record<string, [number, number, number]>;
   advisory: string;
 }[] = [
   {
@@ -77,6 +104,39 @@ const KNOWN_VULN_DEPS: {
     fixedBelow: [2, 70, 0],
     advisory:
       "Insecure path routing (CVE-2025-48370): getUserById / deleteUser / updateUserById / listFactors / deleteFactor accepted non-UUID ids, allowing URL path traversal into a different API function. Fixed in 2.70.0, which requires a valid UUID v4.",
+  },
+  {
+    name: "react",
+    // Three parallel 19.x MINOR branches were patched. A single floor (or a
+    // per-major one) would flag 19.1.5 — patched — as vulnerable, so this needs
+    // branch-level resolution. 18.x and older are deliberately NOT flagged: the
+    // advisory does not state they were affected (see depFixTarget).
+    fixedByBranch: { "19.0": [19, 0, 4], "19.1": [19, 1, 5], "19.2": [19, 2, 4] },
+    advisory:
+      "CVE-2026-23864: multiple denial-of-service vulnerabilities in React Server Components via crafted requests to Server Function endpoints (crash / out-of-memory / CPU exhaustion). Patched in 19.0.4, 19.1.5 and 19.2.4.",
+  },
+  {
+    name: "react-dom",
+    fixedByBranch: { "19.0": [19, 0, 4], "19.1": [19, 1, 5], "19.2": [19, 2, 4] },
+    advisory:
+      "CVE-2026-23864: multiple denial-of-service vulnerabilities in React Server Components via crafted requests to Server Function endpoints (crash / out-of-memory / CPU exhaustion). Patched in 19.0.4, 19.1.5 and 19.2.4.",
+  },
+  {
+    name: "@auth/core",
+    fixedBelow: [0, 41, 3],
+    advisory:
+      "CVE-2026-73419: OAuth state, nonce and PKCE check cookies are not bound to the provider that issued them, enabling provider confusion and unauthorized account linking in multi-provider setups. Fixed in 0.41.3.",
+  },
+  {
+    name: "next-auth",
+    // v5 is deliberately absent. parseVersion strips the prerelease tag, so
+    // 5.0.0-beta.31 (vulnerable) and 5.0.0-beta.32 (patched) both parse to
+    // [5,0,0] — indistinguishable, and a `5` key would be a coin flip. With only
+    // a `4` key, depFixTarget sees major 5 > minMajor 4 and returns null, so v5
+    // betas stay silent. An under-report, never a false positive.
+    fixedByMajor: { 4: [4, 24, 15] },
+    advisory:
+      "CVE-2026-73419: OAuth state/nonce/PKCE check cookies are not bound to the issuing provider, enabling provider confusion and unauthorized account linking. Fixed in 4.24.15 (v4) and 5.0.0-beta.32 (v5 beta — not detectable here, since the prerelease tag is not comparable; verify v5 betas by hand).",
   },
   { name: "lodash", fixedBelow: [4, 17, 21], advisory: "Prototype pollution / ReDoS fixed in lodash 4.17.21." },
   { name: "axios", fixedBelow: [1, 8, 0], advisory: "SSRF / credential leak advisories fixed in axios 1.8.0." },
@@ -120,8 +180,23 @@ function depFixTarget(
   adv: {
     fixedBelow?: [number, number, number];
     fixedByMajor?: Record<number, [number, number, number]>;
+    fixedByBranch?: Record<string, [number, number, number]>;
   }
 ): [number, number, number] | null {
+  // Branch-level floors are the most specific shape, so they win outright.
+  if (adv.fixedByBranch) {
+    const branch = `${ver[0]}.${ver[1]}`;
+    const own = Object.prototype.hasOwnProperty.call(adv.fixedByBranch, branch)
+      ? adv.fixedByBranch[branch]
+      : undefined;
+    // An UNLISTED branch stays silent in BOTH directions. This deliberately
+    // differs from fixedByMajor, which flags anything older than its lowest
+    // patched major. An advisory that patches 19.0/19.1/19.2 tells us nothing
+    // about whether 18.x was ever affected — guessing there would produce a
+    // false positive, and for this product a miss is always the better error.
+    if (!own) return null;
+    return lt(ver, own) ? own : null;
+  }
   if (adv.fixedByMajor) {
     const major = ver[0];
     const own = adv.fixedByMajor[major];
@@ -278,6 +353,11 @@ export const generalRules: Rule[] = [
           const idx = f.content.indexOf(`"${adv.name}"`);
           out.push({
             line: idx >= 0 ? lineAt(f.content, idx) : 1,
+            // The column is what keeps two advisories declared on the SAME line
+            // (a single-line / minified package.json) as two distinct findings —
+            // finding ids are built from file+line+column+snippet, so without it
+            // the second one is silently deduplicated away.
+            column: idx >= 0 ? columnAt(f.content, idx) : undefined,
             snippet:
               idx >= 0 ? snippetAt(f.content, idx) : `"${adv.name}": "${raw}"`,
             message: `${adv.name}@${raw}: ${adv.advisory} (upgrade to >= ${target.join(".")}).`,
@@ -329,6 +409,9 @@ export const generalRules: Rule[] = [
         const idx = f.content.indexOf(`"${name}"`);
         out.push({
           line: idx >= 0 ? lineAt(f.content, idx) : 1,
+          // See general/vulnerable-dependency — the column is what keeps two
+          // deprecated packages on one line from collapsing into one finding.
+          column: idx >= 0 ? columnAt(f.content, idx) : undefined,
           snippet: idx >= 0 ? snippetAt(f.content, idx) : `"${name}": "${deps[name]}"`,
           message: `${name} is deprecated. ${adv.advisory}`,
         });
@@ -432,6 +515,41 @@ export const generalRules: Rule[] = [
         });
       }
       return out;
+    },
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // WARNING — pull_request_target that checks out the untrusted PR head
+  // (the classic "pwn request": fork code running with the base repo's secrets)
+  // ──────────────────────────────────────────────────────────────────────
+  {
+    id: "general/workflow-prt-head-checkout",
+    title: "Workflow runs untrusted PR code with secrets",
+    severity: "warning",
+    category: "general",
+    cwe: "CWE-829",
+    message:
+      "This workflow is triggered by pull_request_target — which runs with the BASE repository's secrets and a read/write GITHUB_TOKEN — and then explicitly checks out the pull request HEAD, i.e. code from the contributor's fork. Anyone who can open a pull request can therefore run their own code with your secrets in scope.",
+    recommendation:
+      "Either switch the trigger to pull_request (fork PRs get no secrets there), or keep pull_request_target but do NOT check out the PR head — split the job so that any step touching untrusted code runs without secrets, and pass results between jobs via artifacts.",
+    reference:
+      "https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/",
+    appliesTo: (f) => IS_WORKFLOW.test(f.path),
+    scan: (f) => {
+      // BOTH markers are required. pull_request_target alone checks out the base
+      // repo and is safe; a head checkout under an ordinary pull_request trigger
+      // gets no secrets. Only the pair is dangerous — and requiring the pair is
+      // what keeps this rule near-zero-false-positive.
+      if (!PRT_TRIGGER.test(f.content)) return [];
+      const m = PR_HEAD_CHECKOUT.exec(f.content);
+      if (!m) return [];
+      return [
+        {
+          line: lineAt(f.content, m.index),
+          column: columnAt(f.content, m.index),
+          snippet: snippetAt(f.content, m.index),
+        },
+      ];
     },
   },
 ];

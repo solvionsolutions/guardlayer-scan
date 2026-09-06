@@ -26,14 +26,16 @@ That's it. Findings appear as annotations on the exact file and line, plus a sum
 
 ## What it checks
 
-29 checks across four areas:
+33 checks across six areas:
 
 - **Supabase RLS** — tables with RLS disabled or missing, `USING (true)` policies, policies not scoped to the user, policies keyed off user-editable `user_metadata`, tables `GRANT`ed to `anon` without RLS, `SECURITY DEFINER` functions with an unpinned `search_path`.
 - **Exposed secrets** — service-role keys and `sb_secret_` keys leaked through `NEXT_PUBLIC_`, hardcoded provider keys, connection strings. (A publishable `sb_publishable_` / anon key is *not* flagged — it's public by design.)
 - **Next.js app layer** — Server Actions and API routes with no auth check, wildcard CORS, open redirects built from request input, missing middleware matchers, `getSession()` trusted in server code.
-- **Dependencies** — known-vulnerable versions of `next` (per release branch) and `@supabase/auth-js`, plus deprecated packages like `@supabase/auth-helpers-*`.
+- **Dependencies** — known-vulnerable versions of `next` and `react` (per release branch), `@supabase/auth-js`, `next-auth` and `@auth/core`, plus deprecated packages like `@supabase/auth-helpers-*`.
 - **Webhooks** — Stripe/webhook handlers that never verify the signature.
-- **MCP configs** — secrets committed in `.mcp.json` / `.cursor/mcp.json`.
+- **MCP / AI-agent config** — secrets committed in `.mcp.json` / `.cursor/mcp.json`, including credentials passed as command-line `args`; a Supabase MCP server without `--read-only`; and GitHub Actions workflows that let any user trigger an AI coding agent, or run untrusted pull-request code with your secrets.
+
+These last checks flag *configuration* — an agent's blast radius and committed credentials. They do not detect prompt injection, tool poisoning, or anything about how an agent behaves at runtime.
 
 Precision-first: rules are tuned to stay quiet on safe code (a publishable Supabase anon key is *not* flagged as a secret, a zod-validated route is *not* flagged as unvalidated).
 
