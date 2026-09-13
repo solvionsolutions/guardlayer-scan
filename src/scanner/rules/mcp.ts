@@ -63,6 +63,26 @@ const AGENT_ACTION =
 const UNTRUSTED_TRIGGER =
   /^\s{0,8}(?:-\s*)?(?:issue_comment|issues|pull_request_target)\s*:?\s*$|\bon\s*:\s*(?:\[[^\]\n]{0,160})?\b(?:issue_comment|issues|pull_request_target)\b/m;
 
+/** Indicators of compromise for KNOWN-malicious MCP servers. Exact, published
+ *  IOCs only — never heuristics — so a hit is never a false positive.
+ *  Deadbugz (Pillar Security, 2026-08-12): a "productivity-suite" MCP server
+ *  added to repos via drive-by pull requests (23 PRs in 74 minutes) that, after
+ *  three tool calls, instructs the agent to hunt for SSH keys, AWS credentials,
+ *  shell history and Kubernetes config. */
+const MALICIOUS_MCP_IOCS: { re: RegExp; campaign: string; source: string }[] = [
+  {
+    re: /productivity-suite-mcp\.onrender\.com|promo-surname-xml-quantum\.trycloudflare\.com|\.deadbug-mcp\.py\b|zellkernel\/productivity-suite-mcp/gi,
+    campaign: "Deadbugz",
+    source:
+      "https://www.pillar.security/blog/deadbugz-currently-active-mcp-supply-chain-campaign",
+  },
+];
+
+/** Supabase MCP feature groups that can CHANGE something. If a server is
+ *  explicitly limited to feature groups outside this set (e.g. docs only), it
+ *  has no write capability and must not be flagged as "not read-only". */
+const SUPABASE_MUTATING_FEATURES = /\b(database|functions|storage|branching|account)\b/i;
+
 /** A restriction on WHO may trigger the job — the documented mitigation. */
 const ACTOR_GATE =
   /author_association|github\.actor\s*[=!]=|contains\s*\(\s*fromJSON|\bpermission\s*==\s*['"](?:admin|write)['"]/i;
@@ -255,6 +275,10 @@ export const mcpRules: Rule[] = [
         if (/read_only\s*=\s*true|"read_?only"\s*:\s*true|--read-only\b/i.test(blob)) {
           continue;
         }
+        // Explicitly limited to non-mutating feature groups (e.g.
+        // `?features=docs` or `--features=docs,debugging`) -> no write capability.
+        const features = /(?:[?&]|--)features[=\s"',]+([a-z_,\s]+)/i.exec(blob);
+        if (features && !SUPABASE_MUTATING_FEATURES.test(features[1])) continue;
         const idx = f.content.indexOf(`"${name}"`);
         out.push({
           line: idx >= 0 ? lineAt(f.content, idx) : 1,
@@ -295,6 +319,35 @@ export const mcpRules: Rule[] = [
           snippet: snippetAt(f.content, agent.index),
         },
       ];
+    },
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // CRITICAL — agent config references a KNOWN-malicious MCP server (exact IOC)
+  // ──────────────────────────────────────────────────────────────────────
+  {
+    id: "mcp/known-malicious-server",
+    title: "Known-malicious MCP server in agent config",
+    severity: "critical",
+    category: "mcp",
+    cwe: "CWE-506",
+    message:
+      "This agent config references an MCP server that matches a published indicator of compromise for an active supply-chain campaign. Configs like this are being added to repositories through drive-by pull requests. Note: this is an exact match against known IOCs — GuardLayer does not (and statically cannot) detect malicious MCP servers in general.",
+    recommendation:
+      "Remove the server from the config and do not merge the change that added it. If an agent has already run with it, treat the machine as compromised: rotate SSH keys, cloud (AWS) credentials, Kubernetes configs and any tokens in shell history, then review what the agent executed.",
+    appliesTo: (f) =>
+      isMcpConfig(f) ||
+      (/\.toml$/i.test(f.path) && /^\s*\[mcp_servers[.\]]/m.test(f.content)),
+    scan: (f) => {
+      const out: RuleMatch[] = [];
+      for (const ioc of MALICIOUS_MCP_IOCS) {
+        out.push(
+          ...matchAll(f, ioc.re, () => ({
+            message: `Matches a published indicator of compromise for the ${ioc.campaign} malicious MCP server campaign (${ioc.source}).`,
+          }))
+        );
+      }
+      return out;
     },
   },
 ];

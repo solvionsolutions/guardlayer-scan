@@ -72,10 +72,10 @@ const PR_HEAD_CHECKOUT =
  *  several maintained majors — a single global floor there is WRONG, because a
  *  higher major always compares "greater" and slips through even when it has its
  *  own known-vulnerable range. `fixedByBranch` = a floor per "major.minor"
- *  branch, for packages (like React) that patch several parallel MINORS of the
- *  same major: React fixed CVE-2026-23864 in 19.0.4, 19.1.5 AND 19.2.4, so both
- *  of the coarser shapes would flag 19.1.5 — a fully patched version — as
- *  vulnerable. */
+ *  branch, for packages (like react-server-dom-*) that patch several parallel
+ *  MINORS of the same major: CVE-2026-44907 was fixed in 19.0.8, 19.1.9 AND
+ *  19.2.8, so both of the coarser shapes would flag 19.1.9 — a fully patched
+ *  version — as vulnerable. */
 const KNOWN_VULN_DEPS: {
   name: string;
   fixedBelow?: [number, number, number];
@@ -105,22 +105,27 @@ const KNOWN_VULN_DEPS: {
     advisory:
       "Insecure path routing (CVE-2025-48370): getUserById / deleteUser / updateUserById / listFactors / deleteFactor accepted non-UUID ids, allowing URL path traversal into a different API function. Fixed in 2.70.0, which requires a valid UUID v4.",
   },
-  {
-    name: "react",
-    // Three parallel 19.x MINOR branches were patched. A single floor (or a
-    // per-major one) would flag 19.1.5 — patched — as vulnerable, so this needs
-    // branch-level resolution. 18.x and older are deliberately NOT flagged: the
-    // advisory does not state they were affected (see depFixTarget).
-    fixedByBranch: { "19.0": [19, 0, 4], "19.1": [19, 1, 5], "19.2": [19, 2, 4] },
-    advisory:
-      "CVE-2026-23864: multiple denial-of-service vulnerabilities in React Server Components via crafted requests to Server Function endpoints (crash / out-of-memory / CPU exhaustion). Patched in 19.0.4, 19.1.5 and 19.2.4.",
-  },
-  {
-    name: "react-dom",
-    fixedByBranch: { "19.0": [19, 0, 4], "19.1": [19, 1, 5], "19.2": [19, 2, 4] },
-    advisory:
-      "CVE-2026-23864: multiple denial-of-service vulnerabilities in React Server Components via crafted requests to Server Function endpoints (crash / out-of-memory / CPU exhaustion). Patched in 19.0.4, 19.1.5 and 19.2.4.",
-  },
+  // React Server Components DoS advisories. These affect ONLY the
+  // react-server-dom-* packages — every one of the four advisories explicitly
+  // lists react-server-dom-webpack / -parcel / -turbopack and NOT `react` or
+  // `react-dom`. Flagging `react` itself would be a false positive (and a false
+  // claim). Next.js vendors its own copy of these packages, so Next apps are
+  // covered by the `next` floor instead; these entries catch other RSC setups.
+  // Floors are the LATEST fix, CVE-2026-44907 (GHSA-wx67-qw84-cm4g, 2026-07-21),
+  // which subsumes CVE-2026-23864 / -23869 / -23870. 18.x and 19.3+ are
+  // unlisted branches and stay silent (see depFixTarget).
+  ...["react-server-dom-webpack", "react-server-dom-parcel", "react-server-dom-turbopack"].map(
+    (name) => ({
+      name,
+      fixedByBranch: {
+        "19.0": [19, 0, 8] as [number, number, number],
+        "19.1": [19, 1, 9] as [number, number, number],
+        "19.2": [19, 2, 8] as [number, number, number],
+      },
+      advisory:
+        "React Server Components denial of service via crafted requests to Server Function endpoints (out-of-memory / CPU exhaustion) — CVE-2026-44907 (July 2026), the latest of four such advisories this year (CVE-2026-23864, -23869, -23870). Patched in 19.0.8, 19.1.9 and 19.2.8.",
+    })
+  ),
   {
     name: "@auth/core",
     fixedBelow: [0, 41, 3],
