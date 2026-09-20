@@ -1,5 +1,6 @@
 import type { Rule, RuleMatch, ScanFile } from "../types";
 import {
+  isTestPath,
   looksLikePlaceholder,
   matchAll,
   matchLines,
@@ -218,6 +219,31 @@ function depFixTarget(
   return null;
 }
 
+const UUID_VALUE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Does this literal look like a CREDENTIAL, or like a readable phrase?
+ *
+ * A real credential carries a long unbroken alphanumeric run. Dummy values in
+ * real code read as separator-joined words — "refresh-token-r2",
+ * "jwt.accesstoken.signature" — whose longest run is short. Measured on real
+ * repos, that shape was the bulk of this rule's false positives.
+ *
+ * A bare UUID is exempt: assigned to a secret-named variable it is a plausible
+ * secret (e.g. GOTRUE_JWT_SECRET), even though its runs are only 8 chars.
+ */
+function looksCredentialLike(value: string): boolean {
+  if (UUID_VALUE.test(value)) return true;
+  let longest = 0;
+  for (const run of value.match(/[A-Za-z0-9]+/g) ?? []) {
+    if (run.length > longest) longest = run.length;
+  }
+  if (longest < 12) return false;
+  // A long single-case run with no digits is still a word, not a token.
+  return /[0-9]/.test(value) || /[A-Z]/.test(value);
+}
+
 export const generalRules: Rule[] = [
   // ──────────────────────────────────────────────────────────────────────
   // CRITICAL — hardcoded provider secret
@@ -275,6 +301,11 @@ export const generalRules: Rule[] = [
     appliesTo: (f) =>
       isJsLike(f) || /\.(json|yml|yaml|env)$/.test(f.path) || /\.env/.test(f.path),
     scan: (f) => {
+      // Test / fixture / mock files are full of deliberately fake credentials.
+      // Measured on real repos, they were the largest false-positive source for
+      // this NAME-based heuristic. general/hardcoded-secret is unaffected and
+      // still matches provider formats in every file.
+      if (isTestPath(f.path)) return [];
       const firebaseCtx = FIREBASE_MARKER.test(f.content);
       return matchLines(f, (line) => {
         // Optional identifier prefix so dbPassword / myApiKey / stripeSecret
@@ -301,10 +332,8 @@ export const generalRules: Rule[] = [
         if (STRIPE_CLIENT_SECRET.test(value)) return null; // ephemeral client secret
         // Firebase web apiKey (AIza…) is public by design.
         if (firebaseCtx && /^AIza[0-9A-Za-z_-]{35}$/.test(value)) return null;
-        // Require credential-like structure (some entropy), not a plain word.
-        if (!/[0-9]/.test(value) && !/[A-Z]/.test(value) && value.length < 24) {
-          return null;
-        }
+        // Require credential-like STRUCTURE, not a readable phrase.
+        if (!looksCredentialLike(value)) return null;
         return {
           column: (m.index ?? 0) + 1,
           message: `Hardcoded value assigned to "${m[1]}".`,

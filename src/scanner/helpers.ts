@@ -199,6 +199,28 @@ export function looksLikePlaceholder(value: string): boolean {
   );
 }
 
+/**
+ * Is this a test / fixture / mock file?
+ *
+ * Test files are full of deliberately fake credentials ("refresh-token-r2",
+ * access_token: "jwt.accesstoken.signature"), and reporting those as leaked
+ * secrets is noise, not security. Measured on real repos: this is the single
+ * largest false-positive source for the NAME-based secret heuristic.
+ *
+ * Only the heuristic rules consult this. A provider-FORMAT match (sk_live_,
+ * AKIA…, a real service_role JWT) still fires anywhere, because those are
+ * unambiguous and a live key committed to a test file is still a live key.
+ */
+export function isTestPath(path: string): boolean {
+  const p = path.toLowerCase().replace(/\\/g, "/");
+  return (
+    /\.(test|spec)\.[jt]sx?$/.test(p) ||
+    /(^|\/)(__tests__|__mocks__|__fixtures__|tests?|e2e|cypress|fixtures?|mocks?|testdata)\//.test(
+      p
+    )
+  );
+}
+
 /** Is this path a Supabase edge function? */
 export function isEdgeFunction(path: string): boolean {
   return /supabase[\/\\]functions[\/\\]/.test(path);

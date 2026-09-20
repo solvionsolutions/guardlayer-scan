@@ -250,7 +250,8 @@ export const mcpRules: Rule[] = [
       "An MCP server connects an AI agent to Supabase with write access — read-only mode is not enabled. Supabase recommends read-only by default: it disables every mutating tool and runs execute_sql as a read-only Postgres user. Without it, the agent can run arbitrary DDL/DML. This flags the missing restriction in your CONFIG; it does not detect prompt injection or how the agent behaves at runtime.",
     recommendation:
       "Add the --read-only flag (or read_only=true) to the Supabase MCP server, and scope it to a single project with --project-ref so a mistake cannot reach your other projects.",
-    reference: "https://supabase.com/docs/guides/ai-tools/mcp",
+    reference:
+      "https://supabase.com/docs/guides/observability/automate-with-agents",
     appliesTo: isMcpConfig,
     scan: (f) => {
       if (!/\.jsonc?$/i.test(f.path)) return [];
